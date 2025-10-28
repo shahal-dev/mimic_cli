@@ -16,10 +16,10 @@ except ImportError:
     raise
 
 from math import *
-import cluster
+import cluster_model
 
 
-def find_shock_in(clstr: cluster.ClusterObj):
+def find_shock_in(clstr: cluster_model.ClusterObj):
     # Read in data
     # xray is smoothed x-ray map
     # temp is smoothed temperature map

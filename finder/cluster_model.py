@@ -2,8 +2,8 @@ import os
 import sys
 import configparser
 import csv
-import config
-import pypeline_io as io
+import configuration
+import file_operations as io
 import numpy as np
 import astropy.io.fits as fits # migrate pycrates commands to fits
 import logging

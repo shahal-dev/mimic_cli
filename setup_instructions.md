@@ -73,9 +73,9 @@ python clusterpyxt_cli.py --help
 python clusterpyxt_cli.py init-cluster A2029
 ```
 
-### Download and process data (after editing config file):
+### Process existing data (after editing config file):
 ```bash
-python clusterpyxt_cli.py download-data -c A2029_cluster_config.ini
+python clusterpyxt_cli.py process-data -c A2029_cluster_config.ini
 ```
 
 ### Continue with other pipeline stages:

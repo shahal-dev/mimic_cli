@@ -323,7 +323,7 @@ def delete_if_exists(filename):
 def read_line_number(filename, line_number):
     if line_number < 1:
         return None
-    for current_line_number, line in enumerate(open(filename, 'rU')):
+    for current_line_number, line in enumerate(open(filename, 'r')):
         if current_line_number == line_number - 1:
             return line[:-1] if line[-1:] == '\n' else line
     return None

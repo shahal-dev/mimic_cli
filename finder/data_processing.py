@@ -1,18 +1,18 @@
 from enum import IntEnum
-from errors import ClusterPyError
-import pypeline_io as io
+from exceptions import ClusterPyError
+import file_operations as io
 import os
-import config
+import configuration
 import subprocess
 import numpy as np
-import acb
-import cluster
+import adaptive_binning
+import cluster_model
 import sys
-import data_operations as do
+import data_utils as do
 import time
 import multiprocessing as mp
 import astropy.io.fits as fits
-import spectral
+import spectral_analysis
 from tqdm import tqdm
 
 try:
@@ -41,21 +41,37 @@ def download_obsid(obsid):
     return download_chandra_obsids([obsid])
 
 def download_data(cluster):
+    """
+    Modified to work with existing downloaded data instead of downloading.
+    Sets up the working directory and initializes observation data structure.
+    """
     io.set_working_directory(cluster.directory)
 
     obsids = [int(obsid) if obsid != '' else None for obsid in cluster.observation_ids]
     
-    num_cpus = mp.cpu_count() // 2
-    if num_cpus > 5:
-        num_streams = 3
-    else:
-        num_streams = num_cpus // 2
-
-    with mp.Pool(num_streams) as pool:
-        results = pool.map(download_obsid, obsids)
-
-    _ = [cluster.observation(obsid).set_ccds() for obsid in obsids]
-    return results
+    print(f"Setting up data structure for {len(obsids)} existing observations...")
+    print(f"Working directory: {cluster.directory}")
+    
+    # Check if data directory exists and contains expected structure
+    if not os.path.exists(cluster.directory):
+        raise FileNotFoundError(f"Data directory not found: {cluster.directory}")
+    
+    # Initialize observation objects and set CCDs for existing data
+    print("Initializing observation data structure...")
+    for obsid in obsids:
+        if obsid is not None:
+            obs_dir = os.path.join(cluster.directory, str(obsid))
+            if not os.path.exists(obs_dir):
+                print(f"Warning: Observation directory not found: {obs_dir}")
+                print(f"Expected structure: {cluster.directory}/<obsid>/")
+            else:
+                print(f"Found observation directory: {obs_dir}")
+    
+    # Set CCDs for all observations
+    _ = [cluster.observation(obsid).set_ccds() for obsid in obsids if obsid is not None]
+    
+    print("Data structure setup complete.")
+    return True
 
 
 def dates_and_versions_match(acis_filename, background_filename):
@@ -206,7 +222,7 @@ def ciao_back(cluster, overwrite=False):
     return
 
 
-def reprocess_cluster_multiobs(cluster: cluster.ClusterObj):
+def reprocess_cluster_multiobs(cluster: cluster_model.ClusterObj):
     print("Reprocessing {}.".format(cluster.name))
     result = chandra_repro_multi(cluster)
     print(result)
@@ -248,7 +264,7 @@ def ciao_merge_background(cluster):
         ciao_hiE_sources(observation)
 
 
-def chandra_repro(observation: cluster.Observation):
+def chandra_repro(observation: cluster_model.Observation):
 
     rt.chandra_repro.punlearn()
     os.chdir(observation.analysis_directory)
@@ -260,7 +276,7 @@ def chandra_repro(observation: cluster.Observation):
 
     return output
 
-def chandra_repro_multi(cluster: cluster.ClusterObj):
+def chandra_repro_multi(cluster: cluster_model.ClusterObj):
     rt.chandra_repro.punlearn()
     os.chdir(cluster.directory)
     obsids = ",".join(cluster.observation_ids)
@@ -408,12 +424,12 @@ def wav_detect(observation):
                  clobber=True)
 
 
-def merge_source_files(cluster: cluster.ClusterObj):
+def merge_source_files(cluster: cluster_model.ClusterObj):
     region_files = [observation.source_region_filename for observation in cluster.observations]
     io.merge_region_files(region_files, cluster.sources_file)
 
 
-def find_sources(cluster: cluster.ClusterObj, ecf=0.1, energy=1.4):
+def find_sources(cluster: cluster_model.ClusterObj, ecf=0.1, energy=1.4):
     for observation in cluster.observations:
         print("Finding sources in {}".format(observation.id))
         make_point_spread_function_map(observation, ecf=ecf, energy=energy)
@@ -616,7 +632,7 @@ def lightcurve_with_exclusion_for(observation):
 
     data_clean = outfile
 
-# def lightcurves_with_exclusion(cluster:cluster.ClusterObj, args):
+# def lightcurves_with_exclusion(cluster:cluster_model.ClusterObj, args):
 #     num_obs = len(cluster.observations)
 #     num_runs = (num_obs // args.num_cpus) + 1
 #     obs_lists = np.array_split(cluster.observation_ids, num_runs)
@@ -629,7 +645,7 @@ def lightcurve_with_exclusion_for(observation):
 #             process.join()
 
 
-def lightcurves_with_exclusion(cluster:cluster.ClusterObj, args):
+def lightcurves_with_exclusion(cluster:cluster_model.ClusterObj, args=None):
     for observation in tqdm(cluster.observations, desc='Finishing light curves', unit='observation', total=len(cluster.observations)):
         lightcurve_with_exclusion_for(observation)
     
@@ -682,7 +698,7 @@ def generate_light_curves(cluster, args):
     #         process.join()
 
 
-def create_global_response_file_for(observation: cluster.Observation):
+def create_global_response_file_for(observation: cluster_model.Observation):
 
     #min_counts = 525
 
@@ -756,7 +772,7 @@ def create_global_response_file_for(observation: cluster.Observation):
     io.copy(redist_matrix_file, observation.redistribution_matrix_file)
 
 
-def make_pcad_lis(observation: cluster.Observation):
+def make_pcad_lis(observation: cluster_model.Observation):
     search_str = "{}/*asol1.fits".format(observation.reprocessing_directory)
     pcad_files = io.get_filename_matching(search_str)
     pcad_list_string = "\n".join(pcad_files)
@@ -767,7 +783,7 @@ def make_pcad_lis(observation: cluster.Observation):
     return pcad_filename
 
 
-def do_function_on_observations_in_parallel(cluster: cluster.ClusterObj,
+def do_function_on_observations_in_parallel(cluster: cluster_model.ClusterObj,
                                             function=None,
                                             num_cpus=1):
     observation_lists = cluster.parallel_observation_lists(num_cpus)
@@ -790,8 +806,9 @@ def do_function_on_observations_in_parallel(cluster: cluster.ClusterObj,
     print("Elapsed time: {:2f} seconds".format(elapsed_time))
 
 
-def make_response_files_in_parallel(cluster: cluster.ClusterObj, args):
-    with mp.Pool(args.num_cpus) as pool:
+def make_response_files_in_parallel(cluster: cluster_model.ClusterObj, args):
+    num_cpus = args.num_cpus if hasattr(args, 'num_cpus') and args.num_cpus else mp.cpu_count()
+    with mp.Pool(num_cpus) as pool:
         _ = list(tqdm(pool.imap(create_global_response_file_for, cluster.observations), desc='Creating global response files', total=len(cluster.observations), unit='observation'))
 
 
@@ -812,7 +829,7 @@ def make_response_files(cluster):
         create_global_response_file_for(observation)
 
 
-def make_mask_file(observation: cluster.Observation):
+def make_mask_file(observation: cluster_model.Observation):
     from astropy.io import fits
     # print("Creating an image mask for {}.".format(observation.id))
 
@@ -955,7 +972,7 @@ def run_ds9_for_master_crop(cluster):
     subprocess.run([ds9_arguments], shell=True)
 
 
-def stage_4_parallel(cluster: cluster.ClusterObj):
+def stage_4_parallel(cluster: cluster_model.ClusterObj):
     print("Making observation masks.")
     do_function_on_observations_in_parallel(cluster, function=make_masks_for)
 
@@ -963,7 +980,7 @@ def stage_4_parallel(cluster: cluster.ClusterObj):
     make_cumulative_mask(cluster)
 
 
-def make_cumulative_mask(cluster: cluster.ClusterObj):
+def make_cumulative_mask(cluster: cluster_model.ClusterObj):
     cumulative_mask_filename = cluster.combined_mask
     cumulative_mask = np.zeros(fits.open(cumulative_mask_filename)[0].data.shape)
 
@@ -997,7 +1014,7 @@ def make_cumulative_mask(cluster: cluster.ClusterObj):
         cumulative_mask[0].data[np.where(cumulative_mask[0].data > 1)] = 1
         cumulative_mask.writeto(cumulative_mask_filename, overwrite=True)
 
-def make_energy_filtered_image(observation: cluster.Observation):  # Energies in eV
+def make_energy_filtered_image(observation: cluster_model.Observation):  # Energies in eV
     rt.dmcopy.punlearn()
     rt.dmcopy(infile=observation.cropped_clean_infile_string,
               outfile=observation.temp_acis_comb_filename,
@@ -1012,7 +1029,7 @@ def make_energy_filtered_image(observation: cluster.Observation):  # Energies in
     io.delete(observation.temp_acis_comb_filename)
 
 
-def make_energy_filtered_background(observation: cluster.Observation):
+def make_energy_filtered_background(observation: cluster_model.Observation):
     rt.dmcopy.punlearn()
     rt.dmcopy(infile=observation.cropped_background_infile_string,
               outfile=observation.temp_back_comb_filename,
@@ -1025,14 +1042,14 @@ def make_energy_filtered_background(observation: cluster.Observation):
 
     io.delete(observation.temp_back_comb_filename)
 
-def make_masks_for(observation: cluster.Observation):
+def make_masks_for(observation: cluster_model.Observation):
     print("Making masks for: {}".format(observation.id))
     make_energy_filtered_image(observation)
     make_energy_filtered_background(observation)
     make_mask_file(observation)
 
 
-def make_acisI_and_back(observation:cluster.Observation):
+def make_acisI_and_back(observation:cluster_model.Observation):
     cluster = observation.cluster
     infile = "{}[sky=region({})]".format(observation.clean, cluster.master_crop_file)
     outfile = cluster.temp_acisI_comb
@@ -1072,7 +1089,7 @@ def make_acisI_and_back(observation:cluster.Observation):
     make_mask_file(observation)
     make_cumulative_mask_file(cluster, observation)
 
-def stage_4(cluster: cluster.ClusterObj, args):
+def stage_4(cluster: cluster_model.ClusterObj, args):
     combined_dir = cluster.combined_directory
 
     io.make_directory(combined_dir)
@@ -1296,11 +1313,11 @@ def run_stage_1(cluster):
     merge_observations(cluster)
 
 
-def finish_stage_1(cluster: cluster.ClusterObj):
+def finish_stage_1(cluster: cluster_model.ClusterObj):
     print_stage_2_prep(cluster)
 
 
-def print_stage_2_prep(cluster: cluster.ClusterObj):
+def print_stage_2_prep(cluster: cluster_model.ClusterObj):
     prep_msg = """Data downloaded and the observations are merged into a surface brightness map {sb_map_filename}. 
     Now it is time to filter out point sources and high energy flares. To do so, first open the surface brightness
     map and create regions around sources you want excluded from the data analysis. These are typically foreground
@@ -1321,7 +1338,7 @@ def print_stage_2_prep(cluster: cluster.ClusterObj):
     print(prep_msg)
 
 
-def check_for_required_stage_2_files(cluster: cluster.ClusterObj):
+def check_for_required_stage_2_files(cluster: cluster_model.ClusterObj):
     if io.file_exists(cluster.sources_file) and io.file_exists(cluster.exclude_file):
         return True
     else:
@@ -1355,7 +1372,7 @@ def run_stage_2_parallel(cluster, args):
     return
 
 
-def finish_stage_2(cluster: cluster.ClusterObj):
+def finish_stage_2(cluster: cluster_model.ClusterObj):
     finish_str = """Stage 2 complete -  Point sources removed -> {xray_sb_nosrc}.
                                         High energy events filtered.""".format(
         xray_sb_nosrc=cluster.xray_surface_brightness_nosrc_filename
@@ -1365,7 +1382,7 @@ def finish_stage_2(cluster: cluster.ClusterObj):
     print_stage_3_prep(cluster)
 
 
-def print_stage_3_prep(cluster: cluster.ClusterObj):
+def print_stage_3_prep(cluster: cluster_model.ClusterObj):
     observation = cluster.observations[0]
     prep_str = """Next is stage 3. This stage extracts the RMF and ARF files. Before continuing the pipeline
     on {cluster_name}, you need to create a region file for each observation. Each observation
@@ -1387,11 +1404,11 @@ def print_stage_3_prep(cluster: cluster.ClusterObj):
     print(prep_str)
 
 
-def print_stage_3_file_message(cluster: cluster.ClusterObj):
+def print_stage_3_file_message(cluster: cluster_model.ClusterObj):
     print("Need the response region file. Please check readme stage 3 for details.")
 
 
-def check_for_required_stage_3_files(cluster: cluster.ClusterObj):
+def check_for_required_stage_3_files(cluster: cluster_model.ClusterObj):
     all_files = True
     for observation in cluster.observations:
         if not io.file_exists(observation.response_file_region_covering_ccds):
@@ -1401,19 +1418,19 @@ def check_for_required_stage_3_files(cluster: cluster.ClusterObj):
     return all_files
 
 
-def run_stage_3(cluster: cluster.ClusterObj, args):
+def run_stage_3(cluster: cluster_model.ClusterObj, args):
     check_for_required_stage_3_files(cluster)
     make_response_files_in_parallel(cluster, args)
 
 
-def finish_stage_3(cluster: cluster.ClusterObj):
+def finish_stage_3(cluster: cluster_model.ClusterObj):
     finish_str = """"""
 
     print(finish_str)
     print_stage_4_prep(cluster)
 
 
-def print_stage_4_prep(cluster: cluster.ClusterObj):
+def print_stage_4_prep(cluster: cluster_model.ClusterObj):
     prep_str = """Now you need to create a region file enclosing the region you would like to crop
     the final analysis to. To do so, open the surface brightness file {xray_sb_file}
     and create a box region containing all parts of the image you want included in the analysis. 
@@ -1434,18 +1451,18 @@ def print_stage_4_prep(cluster: cluster.ClusterObj):
     print(prep_str)
 
 
-def run_stage_4(cluster: cluster.ClusterObj, args):
+def run_stage_4(cluster: cluster_model.ClusterObj, args):
     stage_4(cluster, args)
 
 
-def finish_stage_4(cluster: cluster.ClusterObj):
+def finish_stage_4(cluster: cluster_model.ClusterObj):
     finish_str = """Data filtered and cropped."""
     print(finish_str)
 
     print_stage_5_prep(cluster)
 
 
-def print_stage_5_prep(cluster: cluster.ClusterObj):
+def print_stage_5_prep(cluster: cluster_model.ClusterObj):
     prep_str = """You are now ready for Stage 5. This stage only requires all previous stages to be completed. 
     Stage 5 calculates the adaptive circular bins, generates the scale map, and calculates exposure corrections. 
     It can take a long time (~10s of hours). 
@@ -1457,12 +1474,12 @@ def print_stage_5_prep(cluster: cluster.ClusterObj):
     print(prep_str)
 
 
-def run_stage_5(cluster: cluster.ClusterObj, args=None, num_cpus=mp.cpu_count()):
-    acb.fitting_preparation(cluster, args, num_cpus=num_cpus)
+def run_stage_5(cluster: cluster_model.ClusterObj, args=None, num_cpus=mp.cpu_count()):
+    adaptive_binning.fitting_preparation(cluster, args, num_cpus=num_cpus)
     cluster.last_step_completed = Stage.five.value
 
 
-def finish_stage_5(cluster: cluster.ClusterObj):
+def finish_stage_5(cluster: cluster_model.ClusterObj):
     finish_str = """Scale map created, adaptive circular bins generated, and various other files generated needed 
     to correct exposures."""
 
@@ -1470,7 +1487,7 @@ def finish_stage_5(cluster: cluster.ClusterObj):
     print_stage_spectral_fits_prep(cluster)
 
 
-def print_stage_spectral_fits_prep(cluster: cluster.ClusterObj):
+def print_stage_spectral_fits_prep(cluster: cluster_model.ClusterObj):
     prep_str = """Now ready for spectral fitting. This can be offloaded to a remote machine if necessary.
     If offloading, copy the cluster configuration file, {cluster_config},
     and the acb directory to the remote machine. Update the configuration file to reflect the appropriate
@@ -1491,14 +1508,14 @@ def print_stage_spectral_fits_prep(cluster: cluster.ClusterObj):
     print(prep_str)
 
 
-def run_stage_spectral_fits(cluster: cluster.ClusterObj, num_cpus=mp.cpu_count()):
+def run_stage_spectral_fits(cluster: cluster_model.ClusterObj, num_cpus=mp.cpu_count()):
     spectral.calculate_spectral_fits(cluster, num_cpus)
 
-def finish_stage_spectral_fits(cluster: cluster.ClusterObj):
+def finish_stage_spectral_fits(cluster: cluster_model.ClusterObj):
     print_stage_tmap_prep(cluster)
 
 
-def print_stage_tmap_prep(cluster: cluster.ClusterObj):
+def print_stage_tmap_prep(cluster: cluster_model.ClusterObj):
     prep_str = """Now ready for spectral fitting. 
 
     If offloaded, copy the spectral fits file, {spectral_fits},
@@ -1512,14 +1529,14 @@ def print_stage_tmap_prep(cluster: cluster.ClusterObj):
         spectral_fits=cluster.spec_fits_file
     )
 
-def run_stage_tmap(cluster: cluster.ClusterObj):
+def run_stage_tmap(cluster: cluster_model.ClusterObj):
     pass
 
-def finish_stage_tmap(cluster: cluster.ClusterObj):
+def finish_stage_tmap(cluster: cluster_model.ClusterObj):
     pass
 
 
-def start_from_last(cluster: cluster.ClusterObj, args=None):
+def start_from_last(cluster: cluster_model.ClusterObj, args=None):
     print("Continuing {}".format(cluster.name))
 
     last_stage_completed = int(cluster.last_step_completed)
@@ -1573,7 +1590,7 @@ def start_from_last(cluster: cluster.ClusterObj, args=None):
 
 
 def initialize_cluster(name="", obsids=[], abundance=0.3, redshift=0.0, nH=0.0):
-    clstr = cluster.ClusterObj(name=name, observation_ids=obsids, abundance=abundance,
+    clstr = cluster_model.ClusterObj(name=name, observation_ids=obsids, abundance=abundance,
                                redshift=redshift, hydrogen_column_density=nH,
                                data_directory=config.sys_config.data_directory)
     print('Making initial cluster directory: {}'.format(clstr.directory))
@@ -1587,7 +1604,7 @@ def automated_cluster_init(batch_file):
     data_directory = config.sys_config.data_directory
     csv_clusters = io.get_cluster_info_from_csv(batch_file)
     for clstr in csv_clusters:
-        cluster_obj = cluster.ClusterObj(name=clstr['name'],
+        cluster_obj = cluster_model.ClusterObj(name=clstr['name'],
                                          observation_ids=clstr['obsids'],
                                          data_directory=data_directory,
                                          abundance=clstr['abundance'],
@@ -1610,6 +1627,11 @@ def copy_image_excluding_region(image_file, sources_file, output_file, overwrite
 
 
 def copy_image(infile, outfile, overwrite=False):
+    # Create output directory if it doesn't exist
+    output_dir = os.path.dirname(outfile)
+    if output_dir and not os.path.exists(output_dir):
+        os.makedirs(output_dir, exist_ok=True)
+    
     rt.dmcopy.punlearn()
     rt.dmcopy(infile=infile, outfile=outfile, clobber=overwrite)
 
@@ -1623,7 +1645,7 @@ def copy_image_cropping_region(image_file, crop_region, output_file, overwrite=F
     copy_image(infile, outfile, overwrite=overwrite)
 
 
-def make_cropped_xray_sb_image(clstr: cluster.ClusterObj):
+def make_cropped_xray_sb_image(clstr: cluster_model.ClusterObj):
     infile = "{file}[sky=region({master_crop})]".format(
         file=clstr.xray_surface_brightness_filename,
         master_crop=clstr.master_crop_file
@@ -1632,21 +1654,21 @@ def make_cropped_xray_sb_image(clstr: cluster.ClusterObj):
     copy_image(infile, outfile, overwrite=True)
 
 
-def remove_sources_from_cropped_xray_surface_brightness(clstr: cluster.ClusterObj):
+def remove_sources_from_cropped_xray_surface_brightness(clstr: cluster_model.ClusterObj):
     copy_image_excluding_region(image_file=clstr.xray_surface_brightness_cropped_filename,
                                 sources_file=clstr.sources_file,
                                 output_file=clstr.xray_surface_brightness_nosrc_cropped_filename,
                                 overwrite=True)
 
 
-def make_nosrc_xray_sb(clstr: cluster.ClusterObj):
+def make_nosrc_xray_sb(clstr: cluster_model.ClusterObj):
     copy_image_excluding_region(image_file=clstr.xray_surface_brightness_filename,
                                 sources_file=clstr.sources_file,
                                 output_file=clstr.xray_surface_brightness_nosrc_filename,
                                 overwrite=True)
 
 
-def make_nosrc_cropped_xray_sb(clstr: cluster.ClusterObj):
+def make_nosrc_cropped_xray_sb(clstr: cluster_model.ClusterObj):
     make_cropped_xray_sb_image(clstr)
     remove_sources_from_cropped_xray_surface_brightness(clstr)
 

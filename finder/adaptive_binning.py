@@ -1,13 +1,13 @@
-import cluster
-import pypeline_io as io
+import cluster_model
+import file_operations as io
 import numpy as np
 import time
 import argparse
-import data_operations as do
+import data_utils as do
 from astropy.io import fits
 import multiprocessing as mp
 import ciao_contrib.runtool as rt
-import ciao
+import data_processing
 from tqdm import tqdm
 
 def get_arguments():
@@ -66,7 +66,7 @@ def generate_radius_map(x, y, x_max, y_max):
     return big_mask[x_start:x_stop, y_start:y_stop]
 
 
-def create_circle_regions_in_parallel(cluster: cluster.ClusterObj, num_cpus=1):
+def create_circle_regions_in_parallel(cluster: cluster_model.ClusterObj, num_cpus=1):
     start_time = time.time()
 
     observation_lists = cluster.parallel_observation_lists(num_cpus)
@@ -85,7 +85,7 @@ def create_circle_regions_in_parallel(cluster: cluster.ClusterObj, num_cpus=1):
     print("Time elapsed making regions for fit: {:0.2f} (s)".format(end_time-start_time))
 
 
-def create_circle_region_for(observation: cluster.Observation):
+def create_circle_region_for(observation: cluster_model.Observation):
     mask_fits = fits.open(observation.cluster.combined_mask)
 
     region_map = observation.cluster.scale_map_region_index
@@ -210,7 +210,7 @@ def create_region_index_map(cluster):
     region_file[0].writeto(cluster.region_to_index, overwrite=True)
 
 
-def create_scale_map_region_index(cluster: cluster.ClusterObj):
+def create_scale_map_region_index(cluster: cluster_model.ClusterObj):
     scale_map = cluster.scale_map
     scale_map_regions = np.zeros(scale_map.shape)
     sx = scale_map.shape[0]
@@ -262,7 +262,7 @@ def _update_effective_exposure_time(obsid, current_region, number_regions, time_
     io.flush()
 
 
-def create_scale_map_in_parallel(cluster: cluster.ClusterObj):
+def create_scale_map_in_parallel(cluster: cluster_model.ClusterObj):
     mask = cluster.combined_mask_data
 
     cts_image = np.zeros(mask.shape)
@@ -325,7 +325,7 @@ def create_scale_map_in_parallel(cluster: cluster.ClusterObj):
     print("Time elapsed {:0.2f} seconds.".format(end_time - start_time))
 
 
-def calculate_radius_at_index(index, cluster: cluster.ClusterObj,
+def calculate_radius_at_index(index, cluster: cluster_model.ClusterObj,
                               pix_x: np.ndarray, pix_y: np.ndarray,
                               counts_image: np.ndarray, num_pix: int,
                               back_rescale: np.ndarray):
@@ -555,10 +555,12 @@ def generate_acb_scale_map_for(indices=None, image=np.zeros(0), max_bin_radius=1
     return acb_scale_map, s_to_n_map
 
 
-def fast_acb_creation_parallel(cluster: cluster.ClusterObj, num_cpus=mp.cpu_count()):
+def fast_acb_creation_parallel(cluster: cluster_model.ClusterObj, num_cpus=mp.cpu_count()):
     start_time = time.time()
     indices = cluster.scale_map_indices
     print("Calculating {num_regions} regions".format(num_regions=indices.shape[0]))
+    # Ensure ACB directory exists before writing CSV and FITS outputs
+    io.make_directory(cluster.acb_dir)
     cluster.initialize_scale_map_csv()
     cluster.back_rescale
     cluster.counts_image
@@ -573,7 +575,7 @@ def fast_acb_creation_parallel(cluster: cluster.ClusterObj, num_cpus=mp.cpu_coun
     print("Time elapsed {:0.2f} seconds.".format(end_time - start_time))
 
 
-def fast_acb_creation_serial(cluster: cluster.ClusterObj):
+def fast_acb_creation_serial(cluster: cluster_model.ClusterObj):
     start_time = time.time()
 
     indices = cluster.scale_map_indices
@@ -587,7 +589,7 @@ def fast_acb_creation_serial(cluster: cluster.ClusterObj):
     print("Time elapsed {elapsed:0.2f} seconds.".format(elapsed=end_time - start_time))
 
 
-def prepare_efftime_circle_parallel(cluster: cluster.ClusterObj, num_cpus=1):
+def prepare_efftime_circle_parallel(cluster: cluster_model.ClusterObj, num_cpus=1):
     try:
         from ciao_contrib import runtool as rt
     except ImportError:
@@ -608,7 +610,7 @@ def prepare_efftime_circle_parallel(cluster: cluster.ClusterObj, num_cpus=1):
             process.join()
 
 
-def prepare_effective_time_circles_for(observation: cluster.Observation):
+def prepare_effective_time_circles_for(observation: cluster_model.Observation):
     io.delete_if_exists(observation.effbtime)
     io.delete_if_exists(observation.effdtime)
 
@@ -772,7 +774,7 @@ def prepare_efftime_circle(cluster):
         io.delete_if_exists(observation.backI_high_energy_temp_image)
 
 
-def calculate_effective_times(cluster: cluster.ClusterObj):
+def calculate_effective_times(cluster: cluster_model.ClusterObj):
     start_time = time.time()
     scale_map = cluster.scale_map
     number_of_regions = cluster.number_of_regions
@@ -829,7 +831,7 @@ def calculate_effective_times(cluster: cluster.ClusterObj):
         observation.effective_background_time = effective_background_times
 
 
-def calculate_effective_times_in_parallel(cluster: cluster.ClusterObj, num_cpus=1):
+def calculate_effective_times_in_parallel(cluster: cluster_model.ClusterObj, num_cpus=1):
     observation_lists = cluster.parallel_observation_lists(num_cpus)
     print('Calculating effective times in parallel using {} processes.'.format(num_cpus))
     for observation_list in observation_lists:
@@ -843,17 +845,17 @@ def calculate_effective_times_in_parallel(cluster: cluster.ClusterObj, num_cpus=
             process.join()
 
 
-def calculate_effective_times_in_parallel_map(cluster: cluster.ClusterObj, num_cpus=1):
+def calculate_effective_times_in_parallel_map(cluster: cluster_model.ClusterObj, num_cpus=1):
     with mp.Pool(num_cpus) as pool:
         result = pool.map(calculate_effective_time_for, cluster.observations)
     return result
 
 
-def calculate_effective_times_in_serial(cluster: cluster.ClusterObj):
+def calculate_effective_times_in_serial(cluster: cluster_model.ClusterObj):
     for observation in cluster.observations:
         calculate_effective_time_for(observation)
 
-def calculate_effective_time_for(observation: cluster.Observation):
+def calculate_effective_time_for(observation: cluster_model.Observation):
     """This function returns 2 image maps, data and background, of the cluster representing the same area
      of the cluster the scale map represents. Each pixel of the map represents the effective time observed
      for each of the ACB regions. The effective observed time is essentially the integrated observing time
@@ -922,9 +924,9 @@ def calculate_effective_time_for(observation: cluster.Observation):
     print("ObsID {} complete. Time elapsed: {}".format(observation.id, time_elapsed))
 
 
-def prepare_for_spec(cluster_obj: cluster.ClusterObj):
+def prepare_for_spec(cluster_obj: cluster_model.ClusterObj):
     try:
-        import ciao
+        import data_processing
     except ImportError:
         print("Must be running CIAO before running prepare_for_spec.")
         raise
@@ -942,12 +944,12 @@ def prepare_for_spec(cluster_obj: cluster.ClusterObj):
         io.copy(observation.redistribution_matrix_file, observation.rmf_sc)
         io.copy(observation.acis_mask, observation.acis_mask_sc)
 
-        exposure = ciao.get_exposure(observation.clean)
+        exposure = data_processing.get_exposure(observation.clean)
 
         io.write_contents_to_file(exposure, observation.exposure_time_file, binary=False)
 
 
-def make_commands_lis(cluster: cluster.ClusterObj, resolution):
+def make_commands_lis(cluster: cluster_model.ClusterObj, resolution):
     print("Creating {}".format(cluster.command_lis))
 
     offset = [None, 5, 3, 1][resolution]
@@ -983,7 +985,7 @@ def make_commands_lis(cluster: cluster.ClusterObj, resolution):
     print("Time elapsed: {time:0.2f} sec".format(time=(end_time-start_time)))
 
 
-def make_temperature_map(cluster: cluster.ClusterObj, resolution, average=False):
+def make_temperature_map(cluster: cluster_model.ClusterObj, resolution, average=False):
 
     #coordinates = get_pixel_coordinates(cluster)
     # indices of this array are the region number minus 1
@@ -1050,7 +1052,7 @@ def make_temperature_map(cluster: cluster.ClusterObj, resolution, average=False)
                  overwrite=True)
 
 
-def make_fit_map(cluster: cluster.ClusterObj, fit_type='Norm', resolution=2):
+def make_fit_map(cluster: cluster_model.ClusterObj, fit_type='Norm', resolution=2):
     io.make_directory(cluster.output_dir)
 
     offset = [None, 2, 1, 0][resolution]
@@ -1162,7 +1164,7 @@ def fitting_preparation(clstr, args=None, num_cpus=None):
           "running. If you need to create the bash file to call wrapper.py, make sure you setup the\n"
           "ciao environment in the bash file before calling python wrapper.py --configfile --etc.")
 
-def eff_times_to_fits(clstr: cluster.ClusterObj):
+def eff_times_to_fits(clstr: cluster_model.ClusterObj):
     for observation in clstr.observations:
         effbt = observation.effective_background_time
         effdt = observation.effective_data_time
@@ -1178,7 +1180,7 @@ def eff_times_to_fits(clstr: cluster.ClusterObj):
         temp.writeto(io.get_path('{}/{}_{}_eff_data_time.fits'.format(clstr.directory, clstr.name, observation.id)))
 
 
-def make_density_map(clstr: cluster.ClusterObj):
+def make_density_map(clstr: cluster_model.ClusterObj):
 
     xray_sb_fits = fits.open(clstr.smoothed_xray_sb_cropped_nosrc_filename)
     xray_sb_header = xray_sb_fits[0].header
@@ -1192,8 +1194,8 @@ def make_density_map(clstr: cluster.ClusterObj):
     return n
 
 
-def reproject_density_map(clstr: cluster.ClusterObj):
-    import ciao
+def reproject_density_map(clstr: cluster_model.ClusterObj):
+    import data_processing
 
     print("Reprojecting density map.")
     ciao.reproject(infile=clstr.density_map_filename,
@@ -1203,8 +1205,8 @@ def reproject_density_map(clstr: cluster.ClusterObj):
     return clstr.density_map
 
 
-def reproject_temperature_map(clstr: cluster.ClusterObj):
-    import ciao
+def reproject_temperature_map(clstr: cluster_model.ClusterObj):
+    import data_processing
 
     print("Reprojecting Temperature map.")
     ciao.reproject(infile=clstr.temperature_map_filename,
@@ -1214,7 +1216,7 @@ def reproject_temperature_map(clstr: cluster.ClusterObj):
     return clstr.temperature_map
 
 
-def get_matching_density_and_temperature_maps(clstr: cluster.ClusterObj):
+def get_matching_density_and_temperature_maps(clstr: cluster_model.ClusterObj):
     if not io.file_exists(clstr.density_map_filename):
         make_density_map(clstr)
 
@@ -1227,7 +1229,7 @@ def get_matching_density_and_temperature_maps(clstr: cluster.ClusterObj):
     return n, T
 
 
-def make_pressure_map(clstr: cluster.ClusterObj):
+def make_pressure_map(clstr: cluster_model.ClusterObj):
 
     n, T = get_matching_density_and_temperature_maps(clstr)
 
@@ -1237,11 +1239,11 @@ def make_pressure_map(clstr: cluster.ClusterObj):
 
     fits.writeto(clstr.pressure_map_filename, norm_P, header=clstr.temperature_map_header, overwrite=True)
 
-def make_pressure_error_maps(clstr: cluster.ClusterObj):
+def make_pressure_error_maps(clstr: cluster_model.ClusterObj):
     pass
 
 
-def make_entropy_map(clstr: cluster.ClusterObj):
+def make_entropy_map(clstr: cluster_model.ClusterObj):
 
     n, T = get_matching_density_and_temperature_maps(clstr)
 
@@ -1265,7 +1267,7 @@ def repro_filename(original_filename):
     split_filename[-2] += "_repro"
     return ".".join(split_filename)
 
-def make_smoothed_xray_map(clstr: cluster.ClusterObj):
+def make_smoothed_xray_map(clstr: cluster_model.ClusterObj):
     scale_map = clstr.scale_map_file
     sb_map = clstr.xray_surface_brightness_nosrc_cropped_filename
 
@@ -1306,7 +1308,7 @@ def calc_acb_val_for(args):
     return [x,y, 0]
 
 
-def make_smoothed_xray_map_parallel(clstr: cluster.ClusterObj):
+def make_smoothed_xray_map_parallel(clstr: cluster_model.ClusterObj):
     scale_map = clstr.scale_map_file
     sb_map = clstr.xray_surface_brightness_nosrc_cropped_filename
 
@@ -1355,7 +1357,7 @@ if __name__ == '__main__':
     args, parser = get_arguments()
 
     if args.cluster_config is not None:
-        clstr = cluster.load_cluster(args.cluster_config)
+        clstr = cluster_model.load_cluster(args.cluster_config)
 
         if args.commands:
             make_commands_lis(clstr, args.resolution)
@@ -1377,7 +1379,7 @@ if __name__ == '__main__':
             fitting_preparation(clstr, args)
     else:
         parser.print_help()
-    # a115 = cluster.load_cluster('A115')
+    # a115 = cluster_model.load_cluster('A115')
     # fast_acb_creation_parallel(a115)
     #fast_acb_creation_serial(a115)
     

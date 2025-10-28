@@ -2,6 +2,8 @@
 """
 ClusterPyXT CLI - Main Wrapper Script
 This script runs the ClusterPyXT CLI from the finder directory.
+
+author: @shahal-dev
 """
 
 import sys
@@ -18,9 +20,9 @@ os.chdir(finder_dir)
 
 try:
     # Import and run the main CLI
-    import clusterpyxt_cli
+    import main_cli
     if __name__ == "__main__":
-        main_func = getattr(clusterpyxt_cli, 'main', None)
+        main_func = getattr(main_cli, 'main', None)
         if main_func:
             main_func()
         else:

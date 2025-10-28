@@ -1,12 +1,12 @@
-import ciao
-import pypeline_io as io
+import data_processing
+import file_operations as io
 import numpy as np
-import cluster
+import cluster_model
 import sys
 from sherpa.astro import ui as sherpa
 
 
-def pix_to_pix(cluster: cluster.ClusterObj, region_number, process='main'):
+def pix_to_pix(cluster: cluster_model.ClusterObj, region_number, process='main'):
     print("Processing region number: {reg_num}".format(
         reg_num=region_number
     ))

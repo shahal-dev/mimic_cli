@@ -10,14 +10,16 @@ import sys
 import argparse
 import os
 import configparser
+import multiprocessing as mp
 from pathlib import Path
 
-import pypeline_io as io
-import cluster
-import ciao
-import acb
-import spectral
-from errors import ClusterPyError
+import file_operations as io
+import cluster_model
+import data_processing
+import configuration as config
+import adaptive_binning
+import spectral_analysis
+from exceptions import ClusterPyError
 
 # Check for CIAO availability
 try:
@@ -58,7 +60,22 @@ def create_cluster_config_template(cluster_name: str, output_path: str = None):
     return output_path
 
 
-def load_cluster_from_config(config_file: str) -> cluster.ClusterObj:
+def update_cli_config(config_file: str, cluster_obj: cluster_model.ClusterObj):
+    """Update the CLI configuration file with current cluster status."""
+    config = configparser.ConfigParser()
+    config.read(config_file)
+    
+    if 'processing' not in config:
+        config['processing'] = {}
+    
+    config['processing']['last_step_completed'] = str(cluster_obj.last_step_completed)
+    
+    with open(config_file, 'w') as configfile:
+        config.write(configfile)
+    print(f"Updated {config_file}: last_step_completed = {cluster_obj.last_step_completed}")
+
+
+def load_cluster_from_config(config_file: str) -> cluster_model.ClusterObj:
     """Load cluster configuration from INI file."""
     if not os.path.exists(config_file):
         raise FileNotFoundError(f"Configuration file not found: {config_file}")
@@ -82,6 +99,11 @@ def load_cluster_from_config(config_file: str) -> cluster.ClusterObj:
         abundance = float(cluster_info['abundance'])
         sn_threshold = int(cluster_info.get('signal_to_noise_threshold', '50'))
         
+        # Get data path (optional - if not provided, will use default data directory)
+        data_path = cluster_info.get('data_path', '').strip()
+        if data_path.startswith('#'):
+            data_path = ""  # Use default data directory
+        
         # Get processing info
         processing = config['processing'] if 'processing' in config else {}
         last_step = int(processing.get('last_step_completed', '0'))
@@ -91,11 +113,14 @@ def load_cluster_from_config(config_file: str) -> cluster.ClusterObj:
         print(f"  Redshift: {redshift}")
         print(f"  nH: {nH} × 10²² cm⁻²")
         print(f"  Abundance: {abundance}")
+        if data_path:
+            print(f"  Data path: {data_path}")
         
         # Create cluster object
-        cluster_obj = cluster.ClusterObj(
+        cluster_obj = cluster_model.ClusterObj(
             name=name,
             observation_ids=obsids,
+            data_directory=data_path if data_path else config.sys_config.data_directory,
             hydrogen_column_density=nH,
             redshift=redshift,
             abundance=abundance,
@@ -125,19 +150,24 @@ def cmd_init_cluster(args):
     
     print(f"\nNext steps:")
     print(f"1. Edit the configuration file: {template_path}")
-    print(f"2. Fill in your cluster's observation IDs, redshift, nH, and abundance")
-    print(f"3. Run: clusterpyxt_cli.py download-data -c {template_path}")
+    print(f"2. Fill in your cluster's observation IDs, redshift, nH, abundance, and data_path")
+    print(f"3. Run: clusterpyxt_cli.py process-data -c {template_path}")
 
 
-def cmd_download_data(args):
-    """Download and perform initial processing of Chandra observations (Stage 1)."""
-    print("=== ClusterPyXT Stage 1: Download and Initial Processing ===")
+def cmd_process_data(args):
+    """Set up and perform initial processing of existing Chandra observations (Stage 1)."""
+    print("=== ClusterPyXT Stage 1: Data Setup and Initial Processing ===")
     
     # Load cluster configuration
     cluster_obj = load_cluster_from_config(args.config_file)
     
-    print(f"\nStarting data download and initial processing for cluster: {cluster_obj.name}")
-    print(f"This will download {len(cluster_obj.observation_ids)} Chandra observations and perform initial processing.")
+    print(f"\nStarting data setup and initial processing for cluster: {cluster_obj.name}")
+    print(f"This will process {len(cluster_obj.observation_ids)} existing Chandra observations.")
+    
+    if cluster_obj.data_directory != config.sys_config.data_directory:
+        print(f"Using custom data directory: {cluster_obj.data_directory}")
+    else:
+        print(f"Using default data directory: {cluster_obj.data_directory}")
     
     if not args.yes:
         response = input("Continue? [y/N]: ")
@@ -148,15 +178,16 @@ def cmd_download_data(args):
     # Run Stage 1
     try:
         print("\n--- Starting Stage 1 ---")
-        ciao.run_stage_1(cluster_obj)
-        ciao.finish_stage_1(cluster_obj)
+        data_processing.run_stage_1(cluster_obj)
+        data_processing.finish_stage_1(cluster_obj)
         
         # Update configuration file
         cluster_obj.last_step_completed = 1
         cluster_obj.write_cluster_data()
+        update_cli_config(args.config_file, cluster_obj)
         
         print(f"\n✓ Stage 1 completed successfully!")
-        print(f"✓ Downloaded and processed {len(cluster_obj.observation_ids)} observations")
+        print(f"✓ Set up and processed {len(cluster_obj.observation_ids)} observations")
         print(f"✓ Created merged X-ray surface brightness map")
         
         print(f"\nNext step:")
@@ -199,11 +230,12 @@ def cmd_remove_sources(args):
     
     try:
         print("\n--- Starting Stage 2 ---")
-        ciao.run_stage_2(cluster_obj)
-        ciao.finish_stage_2(cluster_obj)
+        data_processing.run_stage_2(cluster_obj)
+        data_processing.finish_stage_2(cluster_obj)
         
         cluster_obj.last_step_completed = 2
         cluster_obj.write_cluster_data()
+        update_cli_config(args.config_file, cluster_obj)
         
         print(f"\n✓ Stage 2 completed successfully!")
         print(f"✓ Removed point sources and filtered background flares")
@@ -253,11 +285,12 @@ def cmd_generate_responses(args):
     
     try:
         print("\n--- Starting Stage 3 ---")
-        ciao.run_stage_3(cluster_obj, args)
-        ciao.finish_stage_3(cluster_obj)
+        data_processing.run_stage_3(cluster_obj, args)
+        data_processing.finish_stage_3(cluster_obj)
         
         cluster_obj.last_step_completed = 3
         cluster_obj.write_cluster_data()
+        update_cli_config(args.config_file, cluster_obj)
         
         print(f"\n✓ Stage 3 completed successfully!")
         print(f"✓ Generated RMF and ARF files for spectral calibration")
@@ -300,11 +333,12 @@ def cmd_crop_data(args):
         print("\n--- Starting Stage 4 ---")
         print("Filtering data to 0.7-8.0 keV energy range and cropping to analysis region...")
         
-        ciao.run_stage_4(cluster_obj, args)
-        ciao.finish_stage_4(cluster_obj)
+        data_processing.run_stage_4(cluster_obj, args)
+        data_processing.finish_stage_4(cluster_obj)
         
         cluster_obj.last_step_completed = 4
         cluster_obj.write_cluster_data()
+        update_cli_config(args.config_file, cluster_obj)
         
         print(f"\n✓ Stage 4 completed successfully!")
         print(f"✓ Cropped data to analysis region")
@@ -369,11 +403,12 @@ def cmd_create_bins(args):
         if not hasattr(args, 'resolution'):
             args.resolution = 2  # Default medium resolution
         
-        ciao.run_stage_5(cluster_obj, args, num_cpus=num_cpus)
-        ciao.finish_stage_5(cluster_obj)
+        data_processing.run_stage_5(cluster_obj, args, num_cpus=num_cpus)
+        data_processing.finish_stage_5(cluster_obj)
         
         cluster_obj.last_step_completed = 5
         cluster_obj.write_cluster_data()
+        update_cli_config(args.config_file, cluster_obj)
         
         print(f"\n✓ Stage 5 completed successfully!")
         print(f"✓ Created adaptive circular bins with S/N = {cluster_obj.signal_to_noise}")
@@ -464,17 +499,23 @@ def cmd_fit_spectra(args):
         
         # Import spectral fitting module
         try:
-            import spectral
+            import spectral_analysis
         except ImportError:
-            print("✗ Cannot import spectral module")
+            print("✗ Cannot import spectral_analysis module")
             sys.exit(1)
         
-        # Use the spectral.calculate_spectral_fits function
-        spectral.calculate_spectral_fits(cluster_obj, num_cpus=num_cpus)
+        # Use the spectral_analysis.calculate_spectral_fits function
+        spectral_analysis.calculate_spectral_fits(
+            cluster_obj, 
+            num_cpus=num_cpus if num_cpus else mp.cpu_count(),
+            resolution=args.resolution,
+            continue_fitting=args.continue_fitting
+        )
         
         # Update cluster status
         cluster_obj.last_step_completed = 6  # tmap stage
         cluster_obj.write_cluster_data()
+        update_cli_config(args.config_file, cluster_obj)
         
         print(f"\n✓ Spectral fitting completed successfully!")
         print(f"✓ Fitted thermal plasma models to regions")
@@ -517,7 +558,7 @@ def cmd_make_temperature_map(args):
     spec_fits_exists = False
     try:
         if hasattr(cluster_obj, 'spec_fits_file'):
-            import pypeline_io as io
+            import file_operations as io
             spec_fits_exists = io.file_exists(cluster_obj.spec_fits_file)
         if spec_fits_exists:
             print(f"✓ Found spectral fitting results file")
@@ -558,17 +599,18 @@ def cmd_make_temperature_map(args):
         
         # Import ACB module for map creation
         try:
-            import acb
+            import adaptive_binning
         except ImportError:
-            print("✗ Cannot import acb module")
+            print("✗ Cannot import adaptive_binning module")
             sys.exit(1)
         
         # Create temperature map
-        acb.make_temperature_map(cluster_obj, args.resolution, average=args.average)
+        adaptive_binning.make_temperature_map(cluster_obj, args.resolution, average=args.average)
         
         # Update cluster status
         cluster_obj.last_step_completed = 7
         cluster_obj.write_cluster_data()
+        update_cli_config(args.config_file, cluster_obj)
         
         print(f"\n✓ Temperature map creation completed successfully!")
         print(f"✓ Created temperature distribution map")
@@ -608,7 +650,7 @@ def cmd_make_pressure_map(args):
     temp_map_exists = False
     try:
         if hasattr(cluster_obj, 'temperature_map_filename'):
-            import pypeline_io as io
+            import file_operations as io
             temp_map_exists = io.file_exists(cluster_obj.temperature_map_filename)
         if temp_map_exists:
             print(f"✓ Found temperature map")
@@ -636,13 +678,13 @@ def cmd_make_pressure_map(args):
         
         # Import ACB module
         try:
-            import acb
+            import adaptive_binning
         except ImportError:
-            print("✗ Cannot import acb module")
+            print("✗ Cannot import adaptive_binning module")
             sys.exit(1)
         
         # Create pressure map
-        acb.make_pressure_map(cluster_obj)
+        adaptive_binning.make_pressure_map(cluster_obj)
         
         print(f"\n✓ Pressure map creation completed successfully!")
         print(f"✓ Combined temperature and density data")
@@ -678,7 +720,7 @@ def cmd_make_entropy_map(args):
     temp_map_exists = False
     try:
         if hasattr(cluster_obj, 'temperature_map_filename'):
-            import pypeline_io as io
+            import file_operations as io
             temp_map_exists = io.file_exists(cluster_obj.temperature_map_filename)
         if temp_map_exists:
             print(f"✓ Found temperature map")
@@ -706,13 +748,13 @@ def cmd_make_entropy_map(args):
         
         # Import ACB module
         try:
-            import acb
+            import adaptive_binning
         except ImportError:
-            print("✗ Cannot import acb module")
+            print("✗ Cannot import adaptive_binning module")
             sys.exit(1)
         
         # Create entropy map
-        acb.make_entropy_map(cluster_obj)
+        adaptive_binning.make_entropy_map(cluster_obj)
         
         print(f"\n✓ Entropy map creation completed successfully!")
         print(f"✓ Combined temperature and density data")
@@ -742,8 +784,8 @@ Examples:
   # Initialize a new cluster
   clusterpyxt_cli.py init-cluster A2029
   
-  # Download and process data (Stage 1)
-  clusterpyxt_cli.py download-data -c A2029_cluster_config.ini
+  # Process existing data (Stage 1)
+  clusterpyxt_cli.py process-data -c A2029_cluster_config.ini
   
   # Remove sources (Stage 2, after creating region files)
   clusterpyxt_cli.py remove-sources -c A2029_cluster_config.ini
@@ -766,14 +808,14 @@ Examples:
     init_parser.add_argument('-c', '--config-file', help='Output configuration file path')
     init_parser.set_defaults(func=cmd_init_cluster)
     
-    # download-data command (Stage 1)
-    download_parser = subparsers.add_parser('download-data', 
-                                          help='Download Chandra data and perform initial processing (Stage 1)')
-    download_parser.add_argument('-c', '--config-file', required=True, 
+    # process-data command (Stage 1)
+    process_parser = subparsers.add_parser('process-data', 
+                                          help='Process existing Chandra data and perform initial processing (Stage 1)')
+    process_parser.add_argument('-c', '--config-file', required=True, 
                                help='Cluster configuration file')
-    download_parser.add_argument('-y', '--yes', action='store_true', 
+    process_parser.add_argument('-y', '--yes', action='store_true', 
                                help='Skip confirmation prompts')
-    download_parser.set_defaults(func=cmd_download_data)
+    process_parser.set_defaults(func=cmd_process_data)
     
     # remove-sources command (Stage 2)  
     sources_parser = subparsers.add_parser('remove-sources',
@@ -791,6 +833,8 @@ Examples:
                                 help='Cluster configuration file')
     responses_parser.add_argument('-y', '--yes', action='store_true',
                                 help='Skip confirmation prompts')
+    responses_parser.add_argument('--num-cpus', type=int, default=0,
+                                help='Number of CPU cores to use (0 = auto-detect)')
     responses_parser.set_defaults(func=cmd_generate_responses)
     
     # crop-data command (Stage 4)

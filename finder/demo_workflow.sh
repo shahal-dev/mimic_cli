@@ -36,10 +36,10 @@ echo "  hydrogen_column_density = 0.0348"
 echo "  abundance = 0.3"
 echo ""
 
-# Step 4: Show data download (but don't actually run it)
-echo "Step 4: Data download and processing (Stage 1)"
-echo "Command: python clusterpyxt_cli.py download-data -c A2029_demo_cluster_config.ini"
-echo "  - Downloads Chandra observations"
+# Step 4: Show data processing (but don't actually run it)
+echo "Step 4: Data processing (Stage 1)"
+echo "Command: python clusterpyxt_cli.py process-data -c A2029_demo_cluster_config.ini"
+echo "  - Processes existing Chandra observations"
 echo "  - Performs initial data reprocessing"
 echo "  - Creates merged surface brightness maps"
 echo "  - Duration: 10 minutes to several hours"

@@ -1,9 +1,9 @@
-import cluster
+import cluster_model
 import argparse
 import multiprocessing as mp
 import numpy as np
 import time
-import pypeline_io as io
+import file_operations as io
 
 
 def get_arguments():
@@ -41,7 +41,7 @@ def get_arguments():
     return args
 
 
-def print_stage_tmap_prep(cluster: cluster.ClusterObj):
+def print_stage_tmap_prep(cluster: cluster_model.ClusterObj):
     prep_str = """Now ready for spectral fitting. 
 
     If offloaded, copy the spectral fits file, {spectral_fits},
@@ -84,8 +84,17 @@ def print_iteration_string(start_time, iteration, total):
         io.print_red("\n*********************************\n")
 
 
-def calculate_spectral_fits(clstr: cluster.ClusterObj, num_cpus=mp.cpu_count()):
-    args = get_arguments()
+def calculate_spectral_fits(clstr: cluster_model.ClusterObj, num_cpus=mp.cpu_count(), resolution=2, continue_fitting=False):
+    # Create a simple args-like object with the necessary attributes
+    class Args:
+        def __init__(self):
+            self.num_cpus = num_cpus
+            self.resolution = resolution
+            self.cont = continue_fitting
+            self.parallel = num_cpus > 1
+    
+    args = Args()
+    
     if args.cont \
     and io.file_exists(clstr.spec_fits_file) \
     and io.file_exists(clstr.bad_fits_file) \
@@ -142,7 +151,7 @@ def calculate_spectral_fits(clstr: cluster.ClusterObj, num_cpus=mp.cpu_count()):
 if __name__ == '__main__':
     args = get_arguments()
     if args.cluster_config is not None:
-        clstr = cluster.load_cluster(args.cluster_config)
+        clstr = cluster_model.load_cluster(args.cluster_config)
         calculate_spectral_fits(clstr)
     else:
         print("Check help string. spectral.py --help")

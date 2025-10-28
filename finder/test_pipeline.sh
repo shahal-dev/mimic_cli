@@ -18,10 +18,10 @@ CONFIG_FILE="A2029_example_config.ini"
 echo "Testing complete pipeline with config: $CONFIG_FILE"
 echo ""
 
-# Stage 1: Download data (would actually download if data directory accessible)
-echo "--- Testing Stage 1: Download Data ---"
-echo "Command: python clusterpyxt_cli.py download-data -c $CONFIG_FILE"
-echo "Note: This would download ~GB of data and take 10+ minutes"
+# Stage 1: Process data (would process existing data if data directory accessible)
+echo "--- Testing Stage 1: Process Data ---"
+echo "Command: python clusterpyxt_cli.py process-data -c $CONFIG_FILE"
+echo "Note: This would process existing data and take 10+ minutes"
 echo ""
 
 # Stage 2: Remove sources

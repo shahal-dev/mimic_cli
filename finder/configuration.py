@@ -1,9 +1,9 @@
 import os
-import cluster
-import pypeline_io as io
+import cluster_model
+import file_operations as io
 import configparser
 import glob
-import pypeline_io as io
+import file_operations as io
 from PyQt5.QtWidgets import QFileDialog, QDialog
 from PyQt5 import QtWidgets
 

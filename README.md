@@ -79,7 +79,7 @@ num_cpus = 0  # 0 = auto-detect
 ### Step 3: Download and Process Data (Stage 1)
 
 ```bash
-python clusterpyxt_cli.py download-data -c A2029_cluster_config.ini
+python clusterpyxt_cli.py process-data -c A2029_cluster_config.ini
 ```
 
 This will:
@@ -438,7 +438,7 @@ Creates entropy distribution maps showing thermodynamic history.
 | Command | Description | Stage |
 |---------|-------------|-------|
 | `init-cluster <name>` | Create cluster configuration template | Setup |
-| `download-data -c <config>` | Download and process Chandra data | 1 |
+| `process-data -c <config>` | Process existing Chandra data | 1 |
 | `remove-sources -c <config>` | Remove point sources and filter flares | 2 |
 | `generate-responses -c <config>` | Generate RMF and ARF response files | 3 |
 | `crop-data -c <config>` | Crop to analysis region and filter energy | 4 |
@@ -459,16 +459,16 @@ Creates entropy distribution maps showing thermodynamic history.
 ```bash
 # Get help
 python clusterpyxt_cli.py --help
-python clusterpyxt_cli.py download-data --help
+python clusterpyxt_cli.py process-data --help
 
 # Initialize cluster
 python clusterpyxt_cli.py init-cluster Coma
 
 # Run stages with custom config path
-python clusterpyxt_cli.py download-data -c /path/to/custom_config.ini
+python clusterpyxt_cli.py process-data -c /path/to/custom_config.ini
 
 # Skip confirmation prompts
-python clusterpyxt_cli.py download-data -c A2029_cluster_config.ini --yes
+python clusterpyxt_cli.py process-data -c A2029_cluster_config.ini --yes
 
 # Generate response files
 python clusterpyxt_cli.py generate-responses -c A2029_cluster_config.ini
@@ -529,7 +529,7 @@ python -c "import ciao_contrib; print('CIAO available')"
 1. **No PyQt5 dependency** - pure command line interface
 2. **INI-based configuration** - no interactive cluster setup
 3. **Explicit stage commands** - clear separation of pipeline stages  
-4. **Meaningful command names** - `download-data` instead of generic "Stage 1"
+4. **Meaningful command names** - `process-data` instead of generic "Stage 1"
 5. **Better error handling** - clearer error messages and validation
 
 ## Complete Implementation Status
